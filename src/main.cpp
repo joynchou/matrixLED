@@ -16,6 +16,13 @@
 #include <WiFiUdp.h>
 #include <AHT10.h>
 #include <ADXL345_WE.h>
+#include "EEPROM.h"
+#define LENGTH(x) (strlen(x) + 1) // length of char string
+#define EEPROM_SIZE 200           // EEPROM size
+#define WiFi_rst 0                // WiFi credential reset pin (Boot button on ESP32)
+String ssid;                      // string variable to store ssid
+String pss;                       // string variable to store password
+unsigned long rst_millis;
 #define ADXL345_I2CADDR 0x53 // 0x1D if SDO = HIGH
 const int int1Pin = 2;
 volatile bool tap = false;
@@ -28,10 +35,6 @@ volatile bool tap = false;
 #define CLK_PIN 2
 #define DATA_PIN 3
 #define CS_PIN 4
-
-// 替换成你的WiFi网络名称和密码
-const char *ssid = "TP-LINK_8C30";
-const char *password = "z888888889";
 
 // 配置NTP客户端
 WiFiUDP ntpUDP;
@@ -58,26 +61,128 @@ void tapISR()
 {
   tap = true;
 }
+void writeStringToFlash(const char *toStore, int startAddr)
+{
+  int i = 0;
+  for (; i < LENGTH(toStore); i++)
+  {
+    EEPROM.write(startAddr + i, toStore[i]);
+  }
+  EEPROM.write(startAddr + i, '\0');
+  EEPROM.commit();
+}
+
+String readStringFromFlash(int startAddr)
+{
+  char in[128]; // char array of size 128 for reading the stored data
+  int i = 0;
+  for (; i < 128; i++)
+  {
+    in[i] = EEPROM.read(startAddr + i);
+  }
+  return String(in);
+}
 void setup(void)
 {
   Serial.begin(115200);
-  Wire.begin();
-  pinMode(int1Pin, INPUT);
+  Serial.println("matrixClock");
+
   P.begin();
   P.setZone(TEXT_ZONE, TXT_LOWER, TXT_UPPER);
   P.setIntensity(15);
   pM = P.getGraphicObject();
+  strcpy(message, "Wifi...");
+
+  P.displayZoneText(TEXT_ZONE, message, SCROLL_ALIGN, SCROLL_SPEED, SCROLL_PAUSE, SCROLL_EFFECT, SCROLL_EFFECT);
+  P.displayAnimate();
+
+  pinMode(WiFi_rst, INPUT_PULLUP);
+
+  while (!EEPROM.begin(EEPROM_SIZE))
+  { // Init EEPROM
+    strcpy(message, "ERROR 1");
+
+    P.displayZoneText(TEXT_ZONE, message, SCROLL_ALIGN, SCROLL_SPEED, SCROLL_PAUSE, SCROLL_EFFECT, SCROLL_EFFECT);
+    P.displayAnimate();
+
+    Serial.println("failed to init EEPROM");
+    delay(1000);
+  }
+
+  Serial.println("reading wifi info ");
+
+  ssid = readStringFromFlash(0); // Read SSID stored at address 0
+  Serial.print("SSID = ");
+  Serial.println(ssid);
+  pss = readStringFromFlash(40); // Read Password stored at address 40
+  Serial.print("psss = ");
+  Serial.println(pss);
+
+  WiFi.begin(ssid.c_str(), pss.c_str());
+  delay(3500);
+  if (WiFi.status() != WL_CONNECTED) // if WiFi is not connected
+  {
+    Serial.println("wifi init");
+
+    // Init WiFi as Station, start SmartConfig
+    WiFi.mode(WIFI_AP_STA);
+    WiFi.beginSmartConfig();
+
+    // Wait for SmartConfig packet from mobile
+    Serial.println("Waiting for SmartConfig.");
+
+    while (!WiFi.smartConfigDone())
+    {
+      strcpy(message, "Wifi.");
+      P.displayZoneText(TEXT_ZONE, message, SCROLL_ALIGN, SCROLL_SPEED, SCROLL_PAUSE, SCROLL_EFFECT, SCROLL_EFFECT);
+      P.displayAnimate();
+      delay(500);
+      strcpy(message, "Wifi..");
+      P.displayZoneText(TEXT_ZONE, message, SCROLL_ALIGN, SCROLL_SPEED, SCROLL_PAUSE, SCROLL_EFFECT, SCROLL_EFFECT);
+      P.displayAnimate();
+      delay(500);
+      strcpy(message, "Wifi...");
+      P.displayZoneText(TEXT_ZONE, message, SCROLL_ALIGN, SCROLL_SPEED, SCROLL_PAUSE, SCROLL_EFFECT, SCROLL_EFFECT);
+      P.displayAnimate();
+      delay(500);
+      Serial.print(".");
+    }
+
+    Serial.println("");
+    Serial.println("SmartConfig received.");
+
+    // Wait for WiFi to connect to AP
+    Serial.println("Waiting for WiFi");
+    while (WiFi.status() != WL_CONNECTED)
+    {
+      delay(500);
+      Serial.print(".");
+    }
+
+    Serial.println("WiFi Connected.");
+
+    Serial.print("IP Address: ");
+    Serial.println(WiFi.localIP());
+
+    // read the connected WiFi SSID and password
+    ssid = WiFi.SSID();
+    pss = WiFi.psk();
+    Serial.print("SSID:");
+    Serial.println(ssid);
+    Serial.print("PSS:");
+    Serial.println(pss);
+    Serial.println("Store SSID & PSS in Flash");
+    writeStringToFlash(ssid.c_str(), 0); // storing ssid at address 0
+    writeStringToFlash(pss.c_str(), 40); // storing pss at address 40
+  }
+  else
+  {
+    Serial.println("WiFi Connected");
+  }
+
+  pinMode(int1Pin, INPUT);
 
   delay(100);
-
-  // 连接WiFi
-  WiFi.begin(ssid, password);
-  while (WiFi.status() != WL_CONNECTED)
-  {
-    delay(1000);
-    Serial.println("Connecting to WiFi...");
-  }
-  Serial.println("Connected to WiFi");
 
   // 初始化NTP客户端
   timeClient.begin();
@@ -96,13 +201,23 @@ void setup(void)
   while (myAHT20.begin() != true)
   {
     Serial.println(F("AHT20 not connected or fail to load calibration coefficient")); //(F()) save string to flash & keeps dynamic memory free
-    delay(5000);
+    strcpy(message, "ERROR 2");
+
+    P.displayZoneText(TEXT_ZONE, message, SCROLL_ALIGN, SCROLL_SPEED, SCROLL_PAUSE, SCROLL_EFFECT, SCROLL_EFFECT);
+    P.displayAnimate();
+
+    delay(1000);
   }
   Serial.println(F("AHT20 OK"));
 
-  if (!myAcc.init())
+  while (!myAcc.init())
   {
     Serial.println("ADXL345 not connected!");
+    strcpy(message, "ERROR 3");
+
+    P.displayZoneText(TEXT_ZONE, message, SCROLL_ALIGN, SCROLL_SPEED, SCROLL_PAUSE, SCROLL_EFFECT, SCROLL_EFFECT);
+    P.displayAnimate();
+    delay(1000);
   }
   myAcc.setDataRate(ADXL345_DATA_RATE_200);
   Serial.print("Data rate: ");
@@ -125,8 +240,8 @@ unsigned long lastUpdateTime2 = 0;
 
 // 定义呼吸灯周期和亮暗程度
 const int breathePeriod = 2000; // 2 秒钟一个周期
-const int minBrightness = 3;
-const int maxBrightness = 15;
+const int minBrightness = 0;
+const int maxBrightness = 6;
 int displayMode = 0;
 float temp, humidity;
 String formattedTime;
@@ -208,5 +323,23 @@ void loop(void)
 
     myAcc.readAndClearInterrupts();
     tap = false;
+  }
+
+  rst_millis = millis();
+  while (digitalRead(WiFi_rst) == LOW)
+  {
+    // Wait till boot button is pressed
+
+    // check the button press time if it is greater than 3sec clear wifi cred and restart ESP
+    if (millis() - rst_millis >= 3000)
+    {
+      Serial.println("Reseting the WiFi credentials");
+      writeStringToFlash("", 0);  // Reset the SSID
+      writeStringToFlash("", 40); // Reset the Password
+      Serial.println("Wifi credentials erased");
+      Serial.println("Restarting the ESP");
+      delay(500);
+      ESP.restart(); // Restart ESP
+    }
   }
 }
