@@ -17,6 +17,8 @@
 #include <AHT10.h>
 #include <ADXL345_WE.h>
 #include "EEPROM.h"
+#define BLINKER_WIFI
+#include <Blinker.h>
 #define LENGTH(x) (strlen(x) + 1) // length of char string
 #define EEPROM_SIZE 200           // EEPROM size
 #define WiFi_rst 0                // WiFi credential reset pin (Boot button on ESP32)
@@ -57,6 +59,17 @@ const uint8_t TXT_LOWER = 0;
 const uint8_t TXT_UPPER = 3;
 
 char message[] = {"08:00:00:00:00:00"};
+
+BlinkerNumber HUMI("humi");
+BlinkerNumber TEMP("temp");
+float temp, humidity;
+
+void heartbeat()
+{
+  HUMI.print(humidity);
+  TEMP.print(temp);
+}
+
 void tapISR()
 {
   tap = true;
@@ -81,6 +94,16 @@ String readStringFromFlash(int startAddr)
     in[i] = EEPROM.read(startAddr + i);
   }
   return String(in);
+}
+void dataRead(const String &data)
+{
+  BLINKER_LOG("Blinker readString: ", data);
+
+  Blinker.vibrate();
+
+  uint32_t BlinkerTime = millis();
+
+  Blinker.print("millis", BlinkerTime);
 }
 void setup(void)
 {
@@ -174,6 +197,9 @@ void setup(void)
     Serial.println("Store SSID & PSS in Flash");
     writeStringToFlash(ssid.c_str(), 0); // storing ssid at address 0
     writeStringToFlash(pss.c_str(), 40); // storing pss at address 40
+   // Blinker.begin("1085d5bcfd38", ssid.c_str(), pss.c_str());
+    //Blinker.attachData(dataRead);
+    //Blinker.attachHeartbeat(heartbeat);
   }
   else
   {
@@ -243,7 +269,6 @@ const int breathePeriod = 2000; // 2 秒钟一个周期
 const int minBrightness = 0;
 const int maxBrightness = 6;
 int displayMode = 0;
-float temp, humidity;
 String formattedTime;
 #define DURATION 3000
 void loop(void)
@@ -342,4 +367,5 @@ void loop(void)
       ESP.restart(); // Restart ESP
     }
   }
+  Blinker.run();
 }
